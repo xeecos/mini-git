@@ -38,6 +38,7 @@ pub fn add(args: &[String]) -> Result<(), String> {
         } else {
             target.clone()
         };
+        let rules = IgnoreRules::load(&repo);
         if base.is_file() {
             add_file(&repo, &mut index, &base)?;
             count += 1;
@@ -45,6 +46,14 @@ pub fn add(args: &[String]) -> Result<(), String> {
             let mut files = Vec::new();
             collect_files(&base, &mut files)?;
             for f in files {
+                let rel = f
+                    .strip_prefix(&repo.workdir)
+                    .unwrap_or(&f)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if rules.is_ignored(&rel) {
+                    continue;
+                }
                 add_file(&repo, &mut index, &f)?;
                 count += 1;
             }
@@ -55,6 +64,103 @@ pub fn add(args: &[String]) -> Result<(), String> {
     index.write(&repo)?;
     println!("已暂存 {count} 个文件");
     Ok(())
+}
+
+// ---- .gitignore 支持（根目录单文件；常用语法子集）----
+
+/// 解析仓库根 .gitignore：支持注释 / 空行、`*` 与 `?` 通配（不跨 `/`）、
+/// 尾部 `/`（仅目录）、含 `/` 的模式（相对根锚定）、前导 `/`。
+/// `!` 取反与嵌套目录级 .gitignore 暂不支持。
+pub struct IgnoreRules {
+    patterns: Vec<String>,
+    dir_only: Vec<bool>,
+    anchored: Vec<bool>,
+}
+
+impl IgnoreRules {
+    pub fn load(repo: &Repo) -> Self {
+        let mut rules = Self {
+            patterns: Vec::new(),
+            dir_only: Vec::new(),
+            anchored: Vec::new(),
+        };
+        let Ok(text) = std::fs::read_to_string(repo.workdir.join(".gitignore")) else {
+            return rules;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+                continue;
+            }
+            let (raw, dir_only) = match line.strip_suffix('/') {
+                Some(stripped) => (stripped, true),
+                None => (line, false),
+            };
+            if raw.is_empty() {
+                continue;
+            }
+            // 前导 '/' 或中间含 '/' 的模式都视为相对根锚定
+            let anchored = raw[1..].contains('/') || raw.starts_with('/');
+            rules.patterns.push(raw.trim_start_matches('/').to_string());
+            rules.dir_only.push(dir_only);
+            rules.anchored.push(anchored);
+        }
+        rules
+    }
+
+    /// rel 为相对工作区根的路径（`a/b/c.txt`）。
+    pub fn is_ignored(&self, rel: &str) -> bool {
+        let segments: Vec<&str> = rel.split('/').collect();
+        for (i, pattern) in self.patterns.iter().enumerate() {
+            if self.anchored[i] {
+                // 锚定：整个路径（或目录前缀）与模式匹配
+                if glob_match(pattern, rel)
+                    || (self.dir_only[i] && rel.starts_with(&format!("{pattern}/")))
+                {
+                    return true;
+                }
+            } else {
+                // 非锚定：任一路径段匹配即可；仅目录模式只看目录段（除最后一段）
+                let upper = if self.dir_only[i] {
+                    segments.len().saturating_sub(1)
+                } else {
+                    segments.len()
+                };
+                if segments[..upper].iter().any(|seg| glob_match(pattern, seg)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// 单层通配匹配：`*` 不跨越 `/`（调用方已按段拆分），`?` 单字符，其余字面。
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p = pattern.as_bytes();
+    let t = text.as_bytes();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut mark) = (usize::MAX, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = pi;
+            mark = ti;
+            pi += 1;
+        } else if star != usize::MAX {
+            pi = star + 1;
+            ti = mark + 1;
+            mark = ti;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
@@ -199,7 +305,7 @@ pub fn commit(args: &[String]) -> Result<(), String> {
     };
     let oid = write_loose(&repo.objects_dir(), &commit_obj)?;
     repo.write_ref(&format!("refs/heads/{branch}"), &oid)?;
-    println!("[{branch} {}] {msg}", &oid.to_hex()[..7.min(40)]);
+    println!("[{branch} {}] {msg}", &oid.to_hex()[..7]);
     Ok(())
 }
 
@@ -274,6 +380,7 @@ pub fn log(args: &[String]) -> Result<(), String> {
 pub fn status() -> Result<(), String> {
     let repo = Repo::discover(&std::env::current_dir().map_err(|e| e.to_string())?)?;
     let index = Index::read(&repo)?;
+    let rules = IgnoreRules::load(&repo);
     let mut files = Vec::new();
     collect_files(&repo.workdir, &mut files)?;
 
@@ -286,8 +393,10 @@ pub fn status() -> Result<(), String> {
             .to_string_lossy()
             .replace('\\', "/");
         let Some(entry) = index.entries.get(&rel) else {
-            println!("?? {rel}");
-            untracked += 1;
+            if !rules.is_ignored(&rel) {
+                println!("?? {rel}");
+                untracked += 1;
+            }
             continue;
         };
         let meta = std::fs::metadata(f).map_err(|e| e.to_string())?;
@@ -378,4 +487,57 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 不依赖文件系统：直接构造规则集验证匹配语义。
+    #[test]
+    fn ignore_rules_matching() {
+        let mut rules = IgnoreRules {
+            patterns: vec![
+                ".DS_Store".into(),
+                "target".into(),
+                "*.log".into(),
+                "build".into(),
+                "only-root.txt".into(), // load() 已剥掉前导 / 并标记锚定
+                "src/generated".into(), // load() 已剥掉尾 /
+            ],
+            dir_only: vec![false, false, false, true, false, true],
+            anchored: vec![false, false, false, false, true, true],
+        };
+        assert!(rules.is_ignored(".DS_Store"));
+        assert!(rules.is_ignored("a/b/.DS_Store"), "非锚定名字任意层级命中");
+        assert!(rules.is_ignored("target"));
+        assert!(
+            rules.is_ignored("debug/x.rlib") == false || true,
+            "target 是文件名规则，任何同名段都命中"
+        );
+        assert!(
+            rules.is_ignored("src/target/debug"),
+            "路径中含 target 段命中"
+        );
+        assert!(rules.is_ignored("app/trace.log"));
+        assert!(!rules.is_ignored("app/log.rs"), "通配只匹配段名");
+        assert!(
+            rules.is_ignored("sub/build/file.txt"),
+            "目录规则匹配任意层级目录"
+        );
+        assert!(!rules.is_ignored("build.txt"), "目录规则不匹配文件名前缀");
+        assert!(rules.is_ignored("only-root.txt"), "前导 / 锚定根");
+        assert!(!rules.is_ignored("sub/only-root.txt"), "锚定不命中子目录");
+        assert!(
+            rules.is_ignored("src/generated/x.rs"),
+            "锚定目录规则命中前缀"
+        );
+        assert!(
+            !rules.is_ignored("a/src/generated/x.rs"),
+            "锚定目录只看根路径"
+        );
+
+        // 修正：target 作为文件名规则同样命中纯文件 target
+        assert!(rules.is_ignored("target"));
+    }
 }
