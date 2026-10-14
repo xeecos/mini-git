@@ -47,8 +47,8 @@ pub fn push() -> Result<(), String> {
     println!(
         "推送 {}：{} → {}（{} 个对象）",
         refname,
-        &old.to_hex()[..7.min(40)],
-        &new_tip.to_hex()[..7.min(40)],
+        &old.to_hex()[..7],
+        &new_tip.to_hex()[..7],
         objects.len()
     );
     Ok(())

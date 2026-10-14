@@ -41,7 +41,8 @@ SSH 直接使用本机 ssh 配置。
 
 - 解析后的 pack 全部落盘为 loose 对象（不写 .idx / .pack）
 - 推送不生成 delta 压缩（服务端总能接收）
-- `pull` 仅快进合并，分叉时明确拒绝；无 merge / rebase / diff / 分支管理 / .gitignore / shallow
+- `pull` 仅快进合并，分叉时明确拒绝；无 merge / rebase / diff / 分支管理 / shallow
+- `.gitignore` 支持 `*`/`?` 通配、目录规则、根锚定；不支持 `!` 取反与嵌套目录级规则
 - 瘦包仅支持基对象回查本地对象库
 
 生产环境请使用 git 本体或 [gitoxide](https://github.com/GitoxideLMIT/gitoxide)；

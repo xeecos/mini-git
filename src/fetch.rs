@@ -132,10 +132,7 @@ pub fn pull() -> Result<(), String> {
 
     repo.write_ref(&format!("refs/heads/{branch}"), &remote_tip)?;
     checkout_tree(&repo, &tree_of(&repo, &remote_tip)?)?;
-    println!(
-        "快进到 {}（{written} 个对象）",
-        &remote_tip.to_hex()[..7.min(40)]
-    );
+    println!("快进到 {}（{written} 个对象）", &remote_tip.to_hex()[..7]);
     Ok(())
 }
 
