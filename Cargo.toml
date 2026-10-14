@@ -1,0 +1,16 @@
+[package]
+name = "mini-git"
+description = "用纯 Rust 实现的 git 兼容子集：init/add/commit/log + clone/push/pull（smart HTTP + 本地传输）"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+sha1 = "0.10"    # SHA-1（git 对象哈希）
+flate2 = "1"     # zlib（loose 对象 / pack 压缩）
+chrono = "0.4"   # 提交时间戳与时区偏移
+
+[[bin]]
+name = "mini-git"
+path = "src/main.rs"
