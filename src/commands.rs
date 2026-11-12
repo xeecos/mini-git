@@ -99,8 +99,10 @@ impl IgnoreRules {
             if raw.is_empty() {
                 continue;
             }
-            // 前导 '/' 或中间含 '/' 的模式都视为相对根锚定
-            let anchored = raw[1..].contains('/') || raw.starts_with('/');
+            // 前导 '/' 或中间含 '/' 的模式都视为相对根锚定。
+            // 与 raw[1..].contains('/') || raw.starts_with('/') 等价，但避免
+            // 首字符为多字节 UTF-8 时按字节索引 1 切分导致 panic。
+            let anchored = raw.contains('/');
             rules.patterns.push(raw.trim_start_matches('/').to_string());
             rules.dir_only.push(dir_only);
             rules.anchored.push(anchored);

@@ -20,7 +20,8 @@ mod transport;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("help");
-    let rest = &args[1..];
+    // 无参数时 args 为空，直接切片 [1..] 会 panic；用 get 兜底为「显示帮助」。
+    let rest = args.get(1..).unwrap_or(&[]);
 
     let result = match cmd {
         "init" => commands::init(rest),
